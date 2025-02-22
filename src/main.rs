@@ -1,5 +1,11 @@
-use reqwest;
+use embedded_graphics::{
+    pixelcolor::BinaryColor::On as Black,
+    prelude::*,
+    primitives::{Line, PrimitiveStyle},
+};
+use epd_waveshare::{epd1in54::*, prelude::*};
 use serde::{Deserialize, Serialize};
+
 #[tokio::main]
 async fn main() {
     let binance_url = "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT";
@@ -17,7 +23,28 @@ async fn main() {
         println!("res: {:?}", res.last_price);
 
         // okay now that it talks to binance, we gotta display it
+        //
+        //
+        // Setup EPD
+        let mut epd = Epd1in54::new(&mut spi, busy_in, dc, rst, &mut delay, None)?;
 
+        // Use display graphics from embedded-graphics
+        let mut display = Display1in54::default();
+
+        // Use embedded graphics for drawing a line
+
+        let _ = Line::new(Point::new(0, 120), Point::new(0, 295))
+            .into_styled(PrimitiveStyle::with_stroke(Color::Black, 1))
+            .draw(&mut display);
+
+        // Display updated frame
+        epd.update_frame(&mut spi, &display.buffer(), &mut delay)?;
+        epd.display_frame(&mut spi, &mut delay)?;
+
+        // Set the EPD to sleep
+        epd.sleep(&mut spi, &mut delay)?;
+
+        //NOTE: sleep for 1 second
         let duration = tokio::time::Duration::from_secs(1);
         tokio::time::sleep(duration).await;
     }
