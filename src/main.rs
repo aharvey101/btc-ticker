@@ -25,13 +25,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut spi = SpidevDevice::open("/dev/spidev0.0").unwrap();
 
-    let spiOptions = SpidevOptions::new()
+    let spi_options = SpidevOptions::new()
         .bits_per_word(8)
         .max_speed_hz(4_000_000)
         .mode(SpiModeFlags::SPI_MODE_0)
         .build();
 
-    spi.configure(&spiOptions);
+    spi.configure(&spi_options);
 
     // Initialize the EPD
     let mut epd = epd2in13_v2::Epd2in13::new(
@@ -78,11 +78,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Transfer the frame to the display
     //
-    //epd.update_color_frame(&mut spi, display.black_buffer(), display.chromatic_buffer())?;
-    //epd.display_frame(&mut spi, &mut delay)?;
+    epd.update_frame(&mut spi, display.buffer(), delay);
+    epd.display_frame(&mut spi, &mut delay)?;
 
     // Put the display to sleep when done
-    //epd.sleep(&mut spi, &mut delay)?;
+    epd.sleep(&mut spi, &mut delay)?;
 
     // Cleanup GPIO
 
