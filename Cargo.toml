@@ -1,13 +1,9 @@
 [package]
 name = "btc-ticker"
 version = "0.1.0"
-edition = "2021"
 
 [dependencies]
 embedded-graphics = "0.8.1"
-epd-waveshare = { version = "0.6.0", features = ["epd2in13_v3"] }
-reqwest = "0.12.12"
-rppal = "0.22.1"
-serde = { version = "1.0.218", features = ["derive"] }
-serde_json = "1.0.139"
-tokio = { version = "1.43.0", features = ["macros", "rt", "rt-multi-thread"] }
+embedded-hal = { version = "1.0.0", features = ["defmt-03"] }
+epd-waveshare = { version = "0.6.0", features = ["epd2in13_v2"] }
+linux-embedded-hal = "0.4.0"
