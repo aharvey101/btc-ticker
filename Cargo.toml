@@ -5,5 +5,5 @@ version = "0.1.0"
 [dependencies]
 embedded-graphics = "0.8.1"
 embedded-hal = { version = "1.0.0", features = ["defmt-03"] }
-epd-waveshare = { version = "0.6.0", features = ["epd2in13_v2"] }
+epd-waveshare = { version = "0.6.0" }
 linux-embedded-hal = "0.4.0"
