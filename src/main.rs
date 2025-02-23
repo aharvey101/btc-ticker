@@ -1,5 +1,8 @@
 use embedded_graphics::{
-    mono_font::{ascii::FONT_6X10, MonoTextStyle},
+    mono_font::{
+        MonoTextStyle,
+        ascii::{FONT_6X10, FONT_10X20},
+    },
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::{Circle, Line, PrimitiveStyle},
@@ -16,16 +19,22 @@ use epd_waveshare::{
     prelude::*,
 };
 use linux_embedded_hal::{
+    SpidevDevice, SysfsPin,
     spidev::{SpiModeFlags, SpidevOptions},
     sysfs_gpio::{Direction, Pin},
-    SpidevDevice, SysfsPin,
 };
+use serde::{Deserialize, Serialize};
+
 extern crate embedded_graphics;
 extern crate embedded_hal;
 extern crate epd_waveshare;
 extern crate linux_embedded_hal;
+extern crate reqwest;
+extern crate serde;
+extern crate serde_json;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // create spi
 
     let mut spi = SpidevDevice::open("/dev/spidev0.0").unwrap();
@@ -40,11 +49,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let delay = linux_embedded_hal::Delay {};
 
-    let busy = SysfsPin::new(536); // Busy pin
-                                   //
-    let dc = SysfsPin::new(537); // Data/Command pin
-    let rst = SysfsPin::new(529); // Reset pin
-                                  // Export the pins (makes them available for use)
+    let busy = SysfsPin::new(536);
+    //
+    let dc = SysfsPin::new(537);
+    let rst = SysfsPin::new(529);
+
     busy.export()?;
     dc.export()?;
     rst.export()?;
@@ -57,52 +66,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize the EPD
     let mut epd = epd2in13_v2::Epd2in13::new(&mut spi, busy, dc, rst, &mut delay, None).unwrap();
-    // After initializing the EPD
-    //epd.set_lut(&mut spi, &mut delay, None)?; // Use default LUT
+
+    // Set partial mode:
 
     // Clear the display
     epd.clear_frame(&mut spi, &mut delay);
     epd.display_frame(&mut spi, &mut delay);
 
-    // Create a display buffer
     let mut display = Display2in13::default();
-    // Draw some graphics using embedded-graphics
 
-    // Draw a circle
-    Circle::new(Point::new(20, 20), 30)
-        .into_styled(PrimitiveStyle::with_stroke(Color::White, 2))
+    display.set_rotation(DisplayRotation::Rotate90);
+
+    let binance_url = "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT";
+
+    loop {
+        let res = reqwest::get(binance_url)
+            .await
+            .expect("Failed to do get request")
+            .text()
+            .await
+            .expect("Failed to parse response");
+
+        let res: Ticker = serde_json::from_str(res.as_str()).unwrap();
+
+        println!("res: {:?}", res.last_price);
+        let last_price = res.last_price.to_string();
+        let last_price = last_price.as_str();
+        epd.wait_until_idle(&mut spi, &mut delay);
+        epd.clear_frame(&mut spi, &mut delay);
+        epd.display_frame(&mut spi, &mut delay);
+
+        let text_style = MonoTextStyle::new(&FONT_10X20, Color::White);
+        Text::with_baseline(
+            last_price,
+            Point::new(10, 120),
+            text_style,
+            Baseline::Bottom,
+        )
         .draw(&mut display)
         .unwrap();
 
-    // Draw a line
-    println!("Drawing a line");
-    Line::new(Point::new(10, 10), Point::new(100, 100))
-        .into_styled(PrimitiveStyle::with_stroke(Color::White, 1))
-        .draw(&mut display)
-        .unwrap();
+        epd.update_frame(&mut spi, display.buffer(), &mut delay);
+        epd.display_frame(&mut spi, &mut delay)?;
+        //NOTE: sleep for 1 second
+        let duration = tokio::time::Duration::from_secs(1);
+        tokio::time::sleep(duration).await;
+    }
 
     // Draw some text
-    println!("Drawing some text");
-    let text_style = MonoTextStyle::new(&FONT_6X10, Color::White);
-    Text::with_baseline(
-        "Hello Waveshare!",
-        Point::new(10, 120),
-        text_style,
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .unwrap();
-    epd.wait_until_idle(&mut spi, &mut delay);
 
-    // After drawing your graphics but before updating the frame, add:
-
-    // Transfer the frame to the display
-    epd.update_frame(&mut spi, display.buffer(), &mut delay);
-    epd.display_frame(&mut spi, &mut delay)?;
-
-    epd.wait_until_idle(&mut spi, &mut delay);
     // Put the display to sleep when done
-    epd.sleep(&mut spi, &mut delay)?;
+    //epd.sleep(&mut spi, &mut delay)?;
 
     // Cleanup GPIO
     //busy.unexport()?;
@@ -115,5 +129,50 @@ struct MyDelay;
 impl DelayNs for MyDelay {
     fn delay_ns(&mut self, ns: u32) {
         std::thread::sleep(std::time::Duration::from_nanos(ns as u64));
+    }
+}
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ticker {
+    pub symbol: String,
+    pub price_change: String,
+    pub price_change_percent: String,
+    pub weighted_avg_price: String,
+    pub prev_close_price: String,
+    pub last_price: String,
+    pub last_qty: String,
+    pub bid_price: String,
+    pub bid_qty: String,
+    pub ask_price: String,
+    pub ask_qty: String,
+    pub open_price: String,
+    pub high_price: String,
+    pub low_price: String,
+    pub volume: String,
+    pub quote_volume: String,
+    pub open_time: i64,
+    pub close_time: i64,
+    pub first_id: i64,
+    pub last_id: i64,
+    pub count: i64,
+}
+
+// Custom serializer/deserializer for handling string-formatted numbers
+mod string_as_f64 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<f64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<f64>().map_err(serde::de::Error::custom)
     }
 }
