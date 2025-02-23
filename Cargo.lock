@@ -76,6 +76,7 @@ dependencies = [
  "embedded-hal",
  "epd-waveshare",
  "linux-embedded-hal",
+ "profont",
  "reqwest",
  "serde",
  "serde_json",
@@ -1001,6 +1002,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60946a68e5f9d28b0dc1c21bb8a97ee7d018a8b322fa57838ba31cc878e22d99"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "profont"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "016681370a9dd6e7ddb4c1a959922fd59dc45e5ebaa5ff5b13090267898ced34"
+dependencies = [
+ "embedded-graphics",
 ]
 
 [[package]]

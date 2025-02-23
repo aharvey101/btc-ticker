@@ -1,37 +1,30 @@
 use embedded_graphics::{
-    mono_font::{
-        MonoTextStyle,
-        ascii::{FONT_6X10, FONT_10X20},
-    },
-    pixelcolor::BinaryColor,
+    draw_target, geometry,
+    mono_font::{MonoTextStyle, ascii::FONT_10X20},
     prelude::*,
-    primitives::{Circle, Line, PrimitiveStyle},
+    primitives::Rectangle,
     text::{Baseline, Text},
 };
-use embedded_hal::{
-    delay::{self, DelayNs},
-    digital::{self, InputPin, OutputPin},
-    spi,
-};
+use embedded_hal::delay::DelayNs;
 use epd_waveshare::{
     epd2in13_v2::{self, Display2in13},
-    graphics::Display,
     prelude::*,
 };
 use linux_embedded_hal::{
     SpidevDevice, SysfsPin,
     spidev::{SpiModeFlags, SpidevOptions},
-    sysfs_gpio::{Direction, Pin},
+    sysfs_gpio::Direction,
 };
-use serde::{Deserialize, Serialize};
+use profont::{PROFONT_18_POINT, PROFONT_24_POINT};
+use serde::Deserialize;
 
-extern crate embedded_graphics;
-extern crate embedded_hal;
-extern crate epd_waveshare;
-extern crate linux_embedded_hal;
-extern crate reqwest;
-extern crate serde;
-extern crate serde_json;
+//extern crate embedded_graphics;
+//extern crate embedded_hal;
+//extern crate epd_waveshare;
+//extern crate linux_embedded_hal;
+//extern crate reqwest;
+//extern crate serde;
+//extern crate serde_json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,9 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .mode(SpiModeFlags::SPI_MODE_0)
         .build();
 
-    spi.configure(&spi_options);
-
-    let delay = linux_embedded_hal::Delay {};
+    spi.configure(&spi_options)?;
 
     let busy = SysfsPin::new(536);
     //
@@ -67,18 +58,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the EPD
     let mut epd = epd2in13_v2::Epd2in13::new(&mut spi, busy, dc, rst, &mut delay, None).unwrap();
 
-    // Set partial mode:
-
     // Clear the display
-    epd.clear_frame(&mut spi, &mut delay);
-    epd.display_frame(&mut spi, &mut delay);
+    epd.clear_frame(&mut spi, &mut delay)?;
+    epd.display_frame(&mut spi, &mut delay)?;
 
     let mut display = Display2in13::default();
 
+    let mut display_buffer = [0u8; 250 * 122 / 8];
     display.set_rotation(DisplayRotation::Rotate90);
 
     let binance_url = "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT";
+    let (price_x, price_width) = get_aligned_coords(16, 96);
+    let price_y = 20;
+    let price_height = 10;
 
+    let mut last_price = 0.0;
     loop {
         let res = reqwest::get(binance_url)
             .await
@@ -89,27 +83,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let res: Ticker = serde_json::from_str(res.as_str()).unwrap();
 
-        println!("res: {:?}", res.last_price);
         let last_price = res.last_price.to_string();
+        let last_price = format!("${:.8}", last_price);
         let last_price = last_price.as_str();
-        epd.wait_until_idle(&mut spi, &mut delay);
-        epd.clear_frame(&mut spi, &mut delay);
-        epd.display_frame(&mut spi, &mut delay);
 
-        let text_style = MonoTextStyle::new(&FONT_10X20, Color::White);
+        let text_style = MonoTextStyle::new(&PROFONT_24_POINT, Color::White);
+        // Create a drawable area for this buffer
+
+        // Clear price area
+        let price_area = embedded_graphics::primitives::Rectangle::new(
+            Point::new(price_x, price_y),
+            Size::new(price_width, price_height),
+        );
+
+        let mut price_box = display.cropped(&price_area);
+
+        let buffer_size = (price_width * price_height / 8) as usize;
+        let mut partial_buffer = vec![0u8; buffer_size];
+
         Text::with_baseline(
             last_price,
-            Point::new(10, 120),
+            Point::new(price_x, price_y),
             text_style,
             Baseline::Bottom,
         )
-        .draw(&mut display)
+        .draw(&mut price_box)
         .unwrap();
 
-        epd.update_frame(&mut spi, display.buffer(), &mut delay);
+        epd.wait_until_idle(&mut spi, &mut delay)?;
+
+        epd.update_partial_frame(
+            &mut spi,
+            &mut delay,
+            &partial_buffer,
+            price_x.try_into().unwrap(),
+            price_y.try_into().unwrap(),
+            price_width,
+            price_height,
+        )?;
         epd.display_frame(&mut spi, &mut delay)?;
+
         //NOTE: sleep for 1 second
-        let duration = tokio::time::Duration::from_secs(1);
+        let duration = tokio::time::Duration::from_secs(5);
         tokio::time::sleep(duration).await;
     }
 
@@ -122,7 +137,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //busy.unexport()?;
     //dc.unexport()?;
     //rst.unexport()?;
-    Ok(())
 }
 struct MyDelay;
 
@@ -157,22 +171,11 @@ pub struct Ticker {
     pub count: i64,
 }
 
-// Custom serializer/deserializer for handling string-formatted numbers
-mod string_as_f64 {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&value.to_string())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<f64, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        s.parse::<f64>().map_err(serde::de::Error::custom)
-    }
+// Helper function to get coordinates aligned to 8 pixels
+fn get_aligned_coords(x: i32, width: u32) -> (i32, u32) {
+    let aligned_x = (x / 8) * 8; // Round down to nearest multiple of 8
+    let end_x = x + width as i32;
+    let aligned_end_x = ((end_x + 7) / 8) * 8;
+    let aligned_width = (aligned_end_x - aligned_x) as u32;
+    (aligned_x, aligned_width)
 }
